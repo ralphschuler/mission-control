@@ -106,14 +106,19 @@ export async function POST(request: NextRequest) {
 
     // Auto-advance task based on review outcome
     if (status === 'approved') {
-      db.prepare('UPDATE tasks SET status = ?, updated_at = unixepoch() WHERE id = ? AND workspace_id = ?')
-        .run('done', taskId, workspaceId)
+      const completedAt = Math.floor(Date.now() / 1000)
+      db.prepare(`
+        UPDATE tasks
+        SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
+            updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `).run(completedAt, completedAt, taskId, workspaceId)
       eventBus.broadcast('task.status_changed', {
         workspace_id: workspaceId,
         id: taskId,
         status: 'done',
         previous_status: 'review',
-        updated_at: Math.floor(Date.now() / 1000),
+        updated_at: completedAt,
       })
     } else if (status === 'rejected') {
       // Rejected: push back to in_progress with the rejection notes as error_message

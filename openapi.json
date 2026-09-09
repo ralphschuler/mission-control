@@ -7699,6 +7699,42 @@
         }
       }
     },
+    "/api/tasks/{id}/retry": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Retry an existing task",
+        "operationId": "retryTask",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task requeued"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Task is not retryable or changed concurrently"
+          }
+        }
+      }
+    },
     "/api/tasks/queue": {
       "get": {
         "tags": [

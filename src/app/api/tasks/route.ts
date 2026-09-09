@@ -229,7 +229,10 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    const resolvedCompletedAt = completed_at ?? (normalizedStatus === 'done' ? now : null)
+    const isCompleting = normalizedStatus === 'done'
+    const resolvedOutcome = isCompleting ? 'success' : outcome
+    const resolvedErrorMessage = isCompleting ? null : error_message
+    const resolvedCompletedAt = isCompleting ? now : (completed_at ?? null)
 
     const createTaskTx = db.transaction(() => {
       db.prepare(`
@@ -266,8 +269,8 @@ export async function POST(request: NextRequest) {
         due_date,
         estimated_hours,
         actual_hours,
-        outcome,
-        error_message,
+        resolvedOutcome,
+        resolvedErrorMessage,
         resolution,
         feedback_rating,
         feedback_notes,
@@ -390,7 +393,8 @@ export async function PUT(request: NextRequest) {
     `);
     const updateDoneStmt = db.prepare(`
       UPDATE tasks
-      SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
+      SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
+          updated_at = ?
       WHERE id = ? AND workspace_id = ?
     `);
 
@@ -406,7 +410,7 @@ export async function PUT(request: NextRequest) {
         }
 
         if (task.status === 'done') {
-          updateDoneStmt.run(task.status, now, now, task.id, workspaceId);
+          updateDoneStmt.run(now, now, task.id, workspaceId);
         } else {
           updateStmt.run(task.status, now, task.id, workspaceId);
         }

@@ -187,13 +187,21 @@ export async function PUT(
       fieldsToUpdate.push('description = ?');
       updateParams.push(description);
     }
-    if (normalizedStatus !== undefined) {
+    const isCompleting = normalizedStatus === 'done'
+    if (isCompleting) {
       if (normalizedStatus === 'done' && !hasAegisApproval(db, taskId, workspaceId)) {
         return NextResponse.json(
           { error: 'Aegis approval is required to move task to done.' },
           { status: 403 }
         )
       }
+      fieldsToUpdate.push('status = ?');
+      updateParams.push(normalizedStatus);
+      // Completion is a single, canonical lifecycle transition. Do not allow
+      // callers to leave stale failure data or forge a different outcome.
+      fieldsToUpdate.push('outcome = ?', 'completed_at = ?', 'error_message = ?');
+      updateParams.push('success', now, null);
+    } else if (normalizedStatus !== undefined) {
       fieldsToUpdate.push('status = ?');
       updateParams.push(normalizedStatus);
     }
@@ -247,11 +255,11 @@ export async function PUT(
       fieldsToUpdate.push('actual_hours = ?');
       updateParams.push(actual_hours);
     }
-    if (outcome !== undefined) {
+    if (outcome !== undefined && !isCompleting) {
       fieldsToUpdate.push('outcome = ?');
       updateParams.push(outcome);
     }
-    if (error_message !== undefined) {
+    if (error_message !== undefined && !isCompleting) {
       fieldsToUpdate.push('error_message = ?');
       updateParams.push(error_message);
     }
@@ -271,12 +279,9 @@ export async function PUT(
       fieldsToUpdate.push('retry_count = ?');
       updateParams.push(retry_count);
     }
-    if (completed_at !== undefined) {
+    if (completed_at !== undefined && !isCompleting) {
       fieldsToUpdate.push('completed_at = ?');
       updateParams.push(completed_at);
-    } else if (normalizedStatus === 'done' && !currentTask.completed_at) {
-      fieldsToUpdate.push('completed_at = ?');
-      updateParams.push(now);
     }
     if (tags !== undefined) {
       fieldsToUpdate.push('tags = ?');

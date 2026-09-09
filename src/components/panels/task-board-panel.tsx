@@ -1525,12 +1525,11 @@ function TaskDetailModal({
             <button
               onClick={async () => {
                 try {
-                  // raw:true preserves the `if (res.ok) onClose()` gate so a 400/422
+                  // raw:true preserves the `if (res.ok) onClose()` gate so a 409
                   // does not incorrectly close the modal.
-                  const res = await apiFetch<Response>(`/api/tasks/${task.id}`, {
-                    method: 'PUT',
+                  const res = await apiFetch<Response>(`/api/tasks/${task.id}/retry`, {
+                    method: 'POST',
                     raw: true,
-                    body: JSON.stringify({ status: 'assigned', dispatch_attempts: 0, error_message: null }),
                   })
                   if (res.ok) onClose()
                 } catch { /* ignore */ }

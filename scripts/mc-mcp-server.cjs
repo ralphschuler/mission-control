@@ -347,6 +347,7 @@ const TOOLS = [
         title: { type: 'string', description: 'Task title' },
         description: { type: 'string', description: 'Task description' },
         priority: { type: 'string', description: 'Priority: low, medium, high, critical' },
+        project_id: { type: 'number', description: 'Project ID (workspace-scoped)' },
         assigned_to: { type: 'string', description: 'Agent name to assign to' },
       },
       required: ['title'],
@@ -361,6 +362,7 @@ const TOOLS = [
       properties: {
         id: { type: ['string', 'number'], description: 'Task ID' },
         status: { type: 'string', description: 'New status' },
+        project_id: { type: 'number', description: 'Project ID (workspace-scoped)' },
         priority: { type: 'string', description: 'New priority' },
         assigned_to: { type: 'string', description: 'New assignee agent name' },
         title: { type: 'string', description: 'New title' },
@@ -369,6 +371,16 @@ const TOOLS = [
       required: ['id'],
     },
     handler: async ({ id, ...fields }) => api('PUT', `/api/tasks/${id}`, fields),
+  },
+  {
+    name: 'mc_retry_task',
+    description: 'Retry an existing failed or review task, preserving comments and history',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: ['string', 'number'], description: 'Task ID' } },
+      required: ['id'],
+    },
+    handler: async ({ id }) => api('POST', `/api/tasks/${id}/retry`),
   },
   {
     name: 'mc_poll_task_queue',
