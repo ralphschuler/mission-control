@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Auto-advance task based on review outcome
-    let reviewId: number
+    let reviewId = 0
     if (status === 'approved') {
       const completedAt = Math.floor(Date.now() / 1000)
       reviewId = db.transaction(() => {

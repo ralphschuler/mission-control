@@ -78,7 +78,8 @@ export async function POST(
       SELECT t.*, p.name AS project_name, p.ticket_prefix AS project_prefix
       FROM tasks t LEFT JOIN projects p ON p.id = t.project_id AND p.workspace_id = t.workspace_id
       WHERE t.id = ? AND t.workspace_id = ?
-    `).get(taskId, workspaceId)
+    `).get(taskId, workspaceId) as (Task & { project_name?: string; project_prefix?: string }) | undefined
+    if (!updatedTask) return NextResponse.json({ error: 'Task not found after retry' }, { status: 404 })
     eventBus.broadcast('task.updated', { ...updatedTask, workspace_id: workspaceId })
     return NextResponse.json({ task: mapTaskRow(updatedTask) })
   } catch (error) {

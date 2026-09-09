@@ -175,7 +175,7 @@ export async function PUT(
     const previousDescriptionMentionRecipients = resolveMentionRecipients(currentTask.description || '', db, workspaceId).recipients;
     
     // Build dynamic update query
-    const fieldsToUpdate = [];
+    const fieldsToUpdate: string[] = [];
     const updateParams: any[] = [];
     
     if (title !== undefined) {
