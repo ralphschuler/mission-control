@@ -1442,6 +1442,28 @@ function buildReviewPrompt(task: ReviewableTask): string {
   return lines.join('\n')
 }
 
+export function recordAegisRejection(db: Database.Database, taskId: number, workspaceId: number, notes: string, now: number, maxRetries = 3): number {
+  return db.transaction(() => {
+    const task = db.prepare('SELECT dispatch_attempts FROM tasks WHERE id = ? AND workspace_id = ?')
+      .get(taskId, workspaceId) as { dispatch_attempts: number | null } | undefined
+    if (!task) throw new Error('Task disappeared during Aegis rejection')
+    const attempts = (task.dispatch_attempts ?? 0) + 1
+    db.prepare(`
+      INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
+      VALUES (?, 'aegis', 'rejected', ?, ?)
+    `).run(taskId, notes, workspaceId)
+    const failed = attempts >= maxRetries
+    const update = db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ? AND workspace_id = ?')
+      .run(failed ? 'failed' : 'assigned', failed ? `Aegis rejected ${attempts} times. Last: ${notes}` : `Aegis rejected: ${notes}`, attempts, now, taskId, workspaceId)
+    if (update.changes !== 1) throw new Error('Task disappeared during Aegis rejection')
+    db.prepare(`
+      INSERT INTO comments (task_id, author, content, created_at, workspace_id)
+      VALUES (?, 'aegis', ?, ?, ?)
+    `).run(taskId, `Quality Review Rejected (attempt ${attempts}/${maxRetries}):\n${notes}`, now, workspaceId)
+    return attempts
+  })()
+}
+
 function parseReviewVerdict(text: string): { status: 'approved' | 'rejected'; notes: string } {
   const upper = text.toUpperCase()
   const status = upper.includes('VERDICT: APPROVED') ? 'approved' as const : 'rejected' as const
@@ -1556,21 +1578,13 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
         })
         syncAndEscalateIfFailed(task, 'done')
       } else {
-        db.prepare(`
-          INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
-          VALUES (?, 'aegis', ?, ?, ?)
-        `).run(task.id, verdict.status, verdict.notes, task.workspace_id)
         // Rejected: check dispatch_attempts to decide next status
         const now = Math.floor(Date.now() / 1000)
-        const currentAttempts = (db.prepare('SELECT dispatch_attempts FROM tasks WHERE id = ? AND workspace_id = ?').get(task.id, task.workspace_id) as { dispatch_attempts: number } | undefined)?.dispatch_attempts ?? 0
-        const newAttempts = currentAttempts + 1
         const maxAegisRetries = 3
+        const newAttempts = recordAegisRejection(db, task.id, task.workspace_id, verdict.notes, now, maxAegisRetries)
 
         if (newAttempts >= maxAegisRetries) {
           // Too many rejections — move to failed
-          db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ? AND workspace_id = ?')
-            .run('failed', `Aegis rejected ${newAttempts} times. Last: ${verdict.notes}`, newAttempts, now, task.id, task.workspace_id)
-
           eventBus.broadcast('task.status_changed', {
             id: task.id,
             status: 'failed',
@@ -1582,9 +1596,6 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
           syncAndEscalateIfFailed(task, 'failed', `Aegis rejected ${newAttempts} times`, newAttempts)
         } else {
           // Requeue to assigned for re-dispatch with feedback
-          db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ? AND workspace_id = ?')
-            .run('assigned', `Aegis rejected: ${verdict.notes}`, newAttempts, now, task.id, task.workspace_id)
-
           eventBus.broadcast('task.status_changed', {
             id: task.id,
             status: 'assigned',
@@ -1596,11 +1607,6 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
           syncAndEscalateIfFailed(task, 'assigned')
         }
 
-        // Add rejection as a comment so the agent sees it on next dispatch
-        db.prepare(`
-          INSERT INTO comments (task_id, author, content, created_at, workspace_id)
-          VALUES (?, 'aegis', ?, ?, ?)
-        `).run(task.id, `Quality Review Rejected (attempt ${newAttempts}/${maxAegisRetries}):\n${verdict.notes}`, now, task.workspace_id)
       }
 
       db_helpers.logActivity(
