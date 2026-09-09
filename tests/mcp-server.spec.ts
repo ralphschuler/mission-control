@@ -227,6 +227,26 @@ test.describe('MCP Server Integration', () => {
       expect(isError).toBe(false)
       expect((content as any)?.task?.project_id).toBe(project.id)
       if ((content as any)?.task?.id) taskIds.push((content as any).task.id)
+
+      const updated = await mcpTool('mc_update_task', {
+        id: (content as any).task.id,
+        project_id: project.id,
+      })
+      expect(updated.isError).toBe(false)
+      expect((updated.content as any)?.task?.project_id).toBe(project.id)
+    })
+
+    test('mc_retry_task reuses an existing task', async ({ request }) => {
+      const task = await createTestTask(request, {
+        status: 'failed',
+        error_message: 'MCP retry test',
+      })
+      taskIds.push(task.id)
+
+      const { content, isError } = await mcpTool('mc_retry_task', { id: task.id })
+      expect(isError).toBe(false)
+      expect((content as any)?.task?.id).toBe(task.id)
+      expect((content as any)?.task?.status).toBe('assigned')
     })
 
     test('mc_add_comment succeeds', async ({ request }) => {

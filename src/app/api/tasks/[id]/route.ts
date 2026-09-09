@@ -177,7 +177,6 @@ export async function PUT(
     // Build dynamic update query
     const fieldsToUpdate = [];
     const updateParams: any[] = [];
-    let nextProjectTicketNo: number | null = null;
     
     if (title !== undefined) {
       fieldsToUpdate.push('title = ?');
@@ -217,27 +216,8 @@ export async function PUT(
       if (!project) {
         return NextResponse.json({ error: 'Project not found or archived' }, { status: 400 })
       }
-      if (project_id !== currentTask.project_id) {
-        db.prepare(`
-          UPDATE projects
-          SET ticket_counter = ticket_counter + 1, updated_at = unixepoch()
-          WHERE id = ? AND workspace_id = ?
-        `).run(project_id, workspaceId)
-        const row = db.prepare(`
-          SELECT ticket_counter FROM projects
-          WHERE id = ? AND workspace_id = ?
-        `).get(project_id, workspaceId) as { ticket_counter: number } | undefined
-        if (!row || !row.ticket_counter) {
-          return NextResponse.json({ error: 'Failed to allocate project ticket number' }, { status: 500 })
-        }
-        nextProjectTicketNo = row.ticket_counter
-      }
       fieldsToUpdate.push('project_id = ?');
       updateParams.push(project_id);
-      if (nextProjectTicketNo !== null) {
-        fieldsToUpdate.push('project_ticket_no = ?');
-        updateParams.push(nextProjectTicketNo);
-      }
     }
     if (assigned_to !== undefined) {
       fieldsToUpdate.push('assigned_to = ?');
@@ -303,13 +283,32 @@ export async function PUT(
       });
     }
     
-    const stmt = db.prepare(`
-      UPDATE tasks 
-      SET ${fieldsToUpdate.join(', ')}
-      WHERE id = ? AND workspace_id = ?
-    `);
-    
-    stmt.run(...updateParams);
+    const updateTask = db.transaction(() => {
+      if (project_id !== undefined && project_id !== currentTask.project_id) {
+        db.prepare(`
+          UPDATE projects
+          SET ticket_counter = ticket_counter + 1, updated_at = unixepoch()
+          WHERE id = ? AND workspace_id = ?
+        `).run(project_id, workspaceId)
+        const row = db.prepare(`
+          SELECT ticket_counter FROM projects
+          WHERE id = ? AND workspace_id = ?
+        `).get(project_id, workspaceId) as { ticket_counter: number } | undefined
+        if (!row || !row.ticket_counter) {
+          throw new Error('Failed to allocate project ticket number')
+        }
+        fieldsToUpdate.push('project_ticket_no = ?')
+        updateParams.splice(updateParams.length - 2, 0, row.ticket_counter)
+      }
+      const stmt = db.prepare(`
+        UPDATE tasks
+        SET ${fieldsToUpdate.join(', ')}
+        WHERE id = ? AND workspace_id = ?
+      `)
+      stmt.run(...updateParams)
+    })
+
+    updateTask()
     
     // Track changes and log activities
     const changes: string[] = [];
