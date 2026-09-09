@@ -204,12 +204,13 @@ export interface Task {
   estimated_hours?: number;
   actual_hours?: number;
   outcome?: 'success' | 'failed' | 'partial' | 'abandoned';
-  error_message?: string;
+  error_message?: string | null;
   resolution?: string;
   feedback_rating?: number;
   feedback_notes?: string;
   retry_count?: number;
-  completed_at?: number;
+  completed_at?: number | null;
+  dispatch_attempts?: number;
   tags?: string; // JSON string
   metadata?: string; // JSON string
   workspace_id: number;

@@ -240,6 +240,39 @@ test.describe('Tasks CRUD', () => {
     expect(body.error).toContain('Aegis')
   })
 
+  test('POST retry reuses a failed task and preserves its history', async ({ request }) => {
+    const { id } = await createTestTask(request, {
+      status: 'failed',
+      error_message: 'dispatch failed',
+      retry_count: 2,
+    })
+    cleanup.push(id)
+
+    const retry = await request.post(`/api/tasks/${id}/retry`, { headers: API_KEY_HEADER })
+    expect(retry.status()).toBe(200)
+    const retryBody = await retry.json()
+    expect(retryBody.task.id).toBe(id)
+    expect(retryBody.task.status).toBe('assigned')
+    expect(retryBody.task.error_message).toBeNull()
+    expect(retryBody.task.retry_count).toBe(3)
+    expect(retryBody.task.dispatch_attempts).toBe(0)
+
+    const history = await request.get('/api/activities?type=task_retried&entity_type=task', {
+      headers: API_KEY_HEADER,
+    })
+    expect(history.status()).toBe(200)
+    const historyBody = await history.json()
+    expect(JSON.stringify(historyBody)).toContain('task_retried')
+  })
+
+  test('POST retry rejects non-retryable task states', async ({ request }) => {
+    const { id } = await createTestTask(request)
+    cleanup.push(id)
+
+    const retry = await request.post(`/api/tasks/${id}/retry`, { headers: API_KEY_HEADER })
+    expect(retry.status()).toBe(409)
+  })
+
   // ── DELETE /api/tasks/[id] ───────────────────
 
   test('DELETE removes task', async ({ request }) => {

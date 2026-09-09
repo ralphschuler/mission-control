@@ -1531,20 +1531,21 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
 
       const verdict = parseReviewVerdict(agentResponse.text)
 
-      // Insert quality review record
-      db.prepare(`
-        INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
-        VALUES (?, 'aegis', ?, ?, ?)
-      `).run(task.id, verdict.status, verdict.notes, task.workspace_id)
-
       if (verdict.status === 'approved') {
         const completedAt = Math.floor(Date.now() / 1000)
-        db.prepare(`
-          UPDATE tasks
-          SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
-              updated_at = ?
-          WHERE id = ? AND workspace_id = ?
-        `).run(completedAt, completedAt, task.id, task.workspace_id)
+        db.transaction(() => {
+          db.prepare(`
+            INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
+            VALUES (?, 'aegis', ?, ?, ?)
+          `).run(task.id, verdict.status, verdict.notes, task.workspace_id)
+          const update = db.prepare(`
+            UPDATE tasks
+            SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
+                updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+          `).run(completedAt, completedAt, task.id, task.workspace_id)
+          if (update.changes !== 1) throw new Error('Task disappeared during Aegis completion')
+        })()
 
         eventBus.broadcast('task.status_changed', {
           id: task.id,
@@ -1555,6 +1556,10 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
         })
         syncAndEscalateIfFailed(task, 'done')
       } else {
+        db.prepare(`
+          INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
+          VALUES (?, 'aegis', ?, ?, ?)
+        `).run(task.id, verdict.status, verdict.notes, task.workspace_id)
         // Rejected: check dispatch_attempts to decide next status
         const now = Math.floor(Date.now() / 1000)
         const currentAttempts = (db.prepare('SELECT dispatch_attempts FROM tasks WHERE id = ? AND workspace_id = ?').get(task.id, task.workspace_id) as { dispatch_attempts: number } | undefined)?.dispatch_attempts ?? 0

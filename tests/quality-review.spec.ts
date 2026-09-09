@@ -30,6 +30,13 @@ test.describe('Quality Review', () => {
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.id).toBeDefined()
+
+    const taskRes = await request.get(`/api/tasks/${taskId}`, { headers: API_KEY_HEADER })
+    const taskBody = await taskRes.json()
+    expect(taskBody.task.status).toBe('done')
+    expect(taskBody.task.outcome).toBe('success')
+    expect(taskBody.task.error_message).toBeNull()
+    expect(taskBody.task.completed_at).toEqual(expect.any(Number))
   })
 
   test('POST returns 404 for non-existent task', async ({ request }) => {

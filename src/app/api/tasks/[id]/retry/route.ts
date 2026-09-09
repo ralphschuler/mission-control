@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getDatabase, Task } from '@/lib/db'
+import { getDatabase, Task, db_helpers } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { mutationLimiter } from '@/lib/rate-limit'
 import { logger } from '@/lib/logger'
-import { db_helpers } from '@/lib/db'
 import { eventBus } from '@/lib/event-bus'
 import { requireAgentTaskAccess, requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 
 const RETRYABLE_STATUSES = new Set(['failed', 'review', 'quality_review'])
+
+function mapTaskRow(task: any) {
+  return {
+    ...task,
+    tags: task.tags ? JSON.parse(task.tags) : [],
+    metadata: task.metadata ? JSON.parse(task.metadata) : {},
+    ticket_ref: task.project_prefix && task.project_ticket_no
+      ? `${task.project_prefix}-${String(task.project_ticket_no).padStart(3, '0')}`
+      : undefined,
+  }
+}
 
 /** POST /api/tasks/[id]/retry - Requeue an existing task without deleting history. */
 export async function POST(
@@ -38,18 +48,27 @@ export async function POST(
     }
 
     const now = Math.floor(Date.now() / 1000)
-    const result = db.prepare(`
-      UPDATE tasks
-      SET status = 'assigned', dispatch_attempts = 0,
-          retry_count = COALESCE(retry_count, 0) + 1,
-          outcome = NULL, completed_at = NULL, error_message = NULL,
-          updated_at = ?
-      WHERE id = ? AND workspace_id = ? AND status = ?
-    `).run(now, taskId, workspaceId, task.status)
-    if (result.changes !== 1) return NextResponse.json({ error: 'Task changed before retry; try again' }, { status: 409 })
+    const previousDispatchAttempts = task.dispatch_attempts ?? 0
+    const retryTx = db.transaction(() => {
+      const result = db.prepare(`
+        UPDATE tasks
+        SET status = 'assigned', dispatch_attempts = 0,
+            retry_count = COALESCE(retry_count, 0) + 1,
+            outcome = NULL, completed_at = NULL, error_message = NULL,
+            updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND status = ?
+      `).run(now, taskId, workspaceId, task.status)
+      if (result.changes !== 1) return false
 
-    db_helpers.logActivity('task_retried', 'task', taskId, auth.user.username,
-      `Task retry requested: ${task.title}`, { previous_status: task.status }, workspaceId)
+      db_helpers.logActivity('task_retried', 'task', taskId, auth.user.username,
+        `Task retry requested: ${task.title}`, {
+          previous_status: task.status,
+          previous_dispatch_attempts: previousDispatchAttempts,
+          retry_count: (task.retry_count ?? 0) + 1,
+        }, workspaceId)
+      return true
+    })()
+    if (!retryTx) return NextResponse.json({ error: 'Task changed before retry; try again' }, { status: 409 })
     eventBus.broadcast('task.status_changed', {
       id: taskId, status: 'assigned', previous_status: task.status,
       reason: 'manual_retry', workspace_id: workspaceId, updated_at: now,
@@ -61,7 +80,7 @@ export async function POST(
       WHERE t.id = ? AND t.workspace_id = ?
     `).get(taskId, workspaceId)
     eventBus.broadcast('task.updated', { ...updatedTask, workspace_id: workspaceId })
-    return NextResponse.json({ task: updatedTask })
+    return NextResponse.json({ task: mapTaskRow(updatedTask) })
   } catch (error) {
     logger.error({ err: error }, 'POST /api/tasks/[id]/retry error')
     return NextResponse.json({ error: 'Failed to retry task' }, { status: 500 })

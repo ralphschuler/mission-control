@@ -89,30 +89,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 })
     }
 
-    const result = db.prepare(`
-      INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(taskId, reviewer, status, notes, workspaceId)
-
-    db_helpers.logActivity(
-      'quality_review',
-      'task',
-      taskId,
-      reviewer,
-      `Quality review ${status} for task: ${task.title}`,
-      { status, notes },
-      workspaceId
-    )
-
     // Auto-advance task based on review outcome
+    let reviewId: number
     if (status === 'approved') {
       const completedAt = Math.floor(Date.now() / 1000)
-      db.prepare(`
-        UPDATE tasks
-        SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
-            updated_at = ?
-        WHERE id = ? AND workspace_id = ?
-      `).run(completedAt, completedAt, taskId, workspaceId)
+      reviewId = db.transaction(() => {
+        const result = db.prepare(`
+          INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(taskId, reviewer, status, notes, workspaceId)
+        const update = db.prepare(`
+          UPDATE tasks
+          SET status = 'done', outcome = 'success', completed_at = ?, error_message = NULL,
+              updated_at = ?
+          WHERE id = ? AND workspace_id = ?
+        `).run(completedAt, completedAt, taskId, workspaceId)
+        if (update.changes !== 1) throw new Error('Task disappeared during completion')
+        return Number(result.lastInsertRowid)
+      })()
+      db_helpers.logActivity(
+        'quality_review', 'task', taskId, reviewer,
+        `Quality review ${status} for task: ${task.title}`,
+        { status, notes }, workspaceId
+      )
       eventBus.broadcast('task.status_changed', {
         workspace_id: workspaceId,
         id: taskId,
@@ -122,18 +121,32 @@ export async function POST(request: NextRequest) {
       })
     } else if (status === 'rejected') {
       // Rejected: push back to in_progress with the rejection notes as error_message
-      db.prepare('UPDATE tasks SET status = ?, error_message = ?, updated_at = unixepoch() WHERE id = ? AND workspace_id = ?')
-        .run('in_progress', `Quality review rejected by ${reviewer}: ${notes}`, taskId, workspaceId)
+      const rejectedAt = Math.floor(Date.now() / 1000)
+      reviewId = db.transaction(() => {
+        const result = db.prepare(`
+          INSERT INTO quality_reviews (task_id, reviewer, status, notes, workspace_id)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(taskId, reviewer, status, notes, workspaceId)
+        const update = db.prepare('UPDATE tasks SET status = ?, error_message = ?, updated_at = ? WHERE id = ? AND workspace_id = ?')
+          .run('in_progress', `Quality review rejected by ${reviewer}: ${notes}`, rejectedAt, taskId, workspaceId)
+        if (update.changes !== 1) throw new Error('Task disappeared during review rejection')
+        return Number(result.lastInsertRowid)
+      })()
+      db_helpers.logActivity(
+        'quality_review', 'task', taskId, reviewer,
+        `Quality review ${status} for task: ${task.title}`,
+        { status, notes }, workspaceId
+      )
       eventBus.broadcast('task.status_changed', {
         workspace_id: workspaceId,
         id: taskId,
         status: 'in_progress',
         previous_status: 'review',
-        updated_at: Math.floor(Date.now() / 1000),
+        updated_at: rejectedAt,
       })
     }
 
-    return NextResponse.json({ success: true, id: result.lastInsertRowid })
+    return NextResponse.json({ success: true, id: reviewId })
   } catch (error) {
     logger.error({ err: error }, 'POST /api/quality-review error')
     return NextResponse.json({ error: 'Failed to create quality review' }, { status: 500 })

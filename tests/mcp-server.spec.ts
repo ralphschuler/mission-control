@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import path from 'node:path'
-import { createTestAgent, deleteTestAgent, createTestTask, deleteTestTask } from './helpers'
+import { createTestAgent, deleteTestAgent, createTestTask, deleteTestTask, createTestProject, deleteTestProject } from './helpers'
 
 const MCP = path.resolve('scripts/mc-mcp-server.cjs')
 const PACKAGE_VERSION = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')).version
@@ -190,10 +190,14 @@ test.describe('MCP Server Integration', () => {
 
   test.describe('task tools', () => {
     const taskIds: number[] = []
+    const projectIds: number[] = []
 
     test.afterEach(async ({ request }) => {
       for (const id of taskIds.splice(0)) {
         await deleteTestTask(request, id).catch(() => {})
+      }
+      for (const id of projectIds.splice(0)) {
+        await deleteTestProject(request, id).catch(() => {})
       }
     })
 
@@ -210,6 +214,18 @@ test.describe('MCP Server Integration', () => {
     test('mc_create_task creates a task', async ({ request }) => {
       const { content, isError } = await mcpTool('mc_create_task', { title: 'MCP e2e test task' })
       expect(isError).toBe(false)
+      if ((content as any)?.task?.id) taskIds.push((content as any).task.id)
+    })
+
+    test('mc_create_task forwards workspace-scoped project_id', async ({ request }) => {
+      const project = await createTestProject(request)
+      projectIds.push(project.id)
+      const { content, isError } = await mcpTool('mc_create_task', {
+        title: 'MCP project task',
+        project_id: project.id,
+      })
+      expect(isError).toBe(false)
+      expect((content as any)?.task?.project_id).toBe(project.id)
       if ((content as any)?.task?.id) taskIds.push((content as any).task.id)
     })
 
